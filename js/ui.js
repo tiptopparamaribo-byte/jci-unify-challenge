@@ -73,42 +73,71 @@ const UI = {
 
   showCreateRoom() {
     const code = ENGINE.generateRoomCode();
+    UI._storedRoomCode = code;
     this.showModal(`
       <h2>Create a Game Room</h2>
       <div class="room-code-display">${code}</div>
-      <p class="hint">Share this code with your team members.</p>
 
       <div class="form-group">
         <label>Connection Mode</label>
-        <select id="conn-mode">
-          <option value="local">Local (same device — offline)</option>
-          <option value="broadcast">Browser Tabs (same browser)</option>
-          <option value="peer">Online (different devices, needs internet)</option>
+        <select id="conn-mode" onchange="UI._onConnModeChange()">
+          <option value="peer">Online — different devices (recommended)</option>
+          <option value="broadcast">Browser Tabs — same browser</option>
+          <option value="local">Local — hot-seat on one device</option>
         </select>
       </div>
 
-      <div class="form-group">
-        <label>Number of Teams</label>
-        <select id="num-teams">
-          <option value="2">2 Teams</option>
-          <option value="3">3 Teams</option>
-          <option value="4">4 Teams</option>
-          <option value="5">5 Teams</option>
-          <option value="6">6 Teams</option>
-        </select>
+      <!-- Online / broadcast: each device joins with their own team -->
+      <div id="online-section">
+        <p class="hint">Each team joins from their own device using the code above. You enter only your own team here.</p>
+        <div class="form-group">
+          <label>Total Number of Teams</label>
+          <select id="num-teams">
+            <option value="2">2 Teams</option>
+            <option value="3">3 Teams</option>
+            <option value="4">4 Teams</option>
+            <option value="5">5 Teams</option>
+            <option value="6">6 Teams</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Your Team Name</label>
+          <input type="text" id="host-team-name" placeholder="e.g. JCI Panthers" />
+        </div>
+        <div class="form-group">
+          <label>Your Team Members (comma-separated)</label>
+          <input type="text" id="host-team-members" placeholder="e.g. Mitchel, Sarah" />
+        </div>
+        <button class="btn-primary" onclick="UI._createRoom()">Create Room &amp; Wait for Teams</button>
       </div>
 
-      <div id="team-setup-container"></div>
-
-      <button class="btn-primary" onclick="UI._generateTeamSetup()">Configure Teams</button>
+      <!-- Local hot-seat: all teams entered upfront on one device -->
+      <div id="local-section" style="display:none">
+        <p class="hint">All teams take turns on this one device.</p>
+        <div class="form-group">
+          <label>Number of Teams</label>
+          <select id="local-num-teams" onchange="UI._generateLocalTeamSetup()">
+            <option value="2">2 Teams</option>
+            <option value="3">3 Teams</option>
+            <option value="4">4 Teams</option>
+            <option value="5">5 Teams</option>
+            <option value="6">6 Teams</option>
+          </select>
+        </div>
+        <div id="team-setup-container"></div>
+        <button class="btn-primary" onclick="UI._generateLocalTeamSetup()">Configure Teams</button>
+      </div>
     `, null, { wide: true });
-
-    document.getElementById('num-teams').addEventListener('change', () => UI._generateTeamSetup());
-    UI._storedRoomCode = code;
   },
 
-  _generateTeamSetup() {
-    const n = parseInt(document.getElementById('num-teams').value) || 2;
+  _onConnModeChange() {
+    const mode = document.getElementById('conn-mode').value;
+    document.getElementById('online-section').style.display = mode === 'local' ? 'none' : '';
+    document.getElementById('local-section').style.display = mode === 'local' ? '' : 'none';
+  },
+
+  _generateLocalTeamSetup() {
+    const n = parseInt(document.getElementById('local-num-teams').value) || 2;
     const container = document.getElementById('team-setup-container');
     let html = '<div class="team-setup-grid">';
     for (let i = 1; i <= n; i++) {
@@ -127,14 +156,14 @@ const UI = {
       `;
     }
     html += `</div>
-      <button class="btn-primary" style="margin-top:1rem" onclick="UI._startGameFromSetup(${n})">
-        Start Game
+      <button class="btn-primary" style="margin-top:1rem" onclick="UI._startLocalGame(${n})">
+        Start Hot-Seat Game
       </button>
     `;
     container.innerHTML = html;
   },
 
-  async _startGameFromSetup(n) {
+  _startLocalGame(n) {
     const teams = [];
     for (let i = 1; i <= n; i++) {
       const name = (document.getElementById(`team-name-${i}`)?.value || `Team ${i}`).trim();
@@ -143,22 +172,125 @@ const UI = {
       if (players.length === 0) players.push('Member 1');
       teams.push({ name, players });
     }
-
-    const mode = document.getElementById('conn-mode')?.value || 'local';
     ENGINE.initLocalGame(teams);
+    this.closeModal();
+    this.renderGame();
+  },
 
-    if (mode !== 'local') {
-      this.showToast('Connecting to network...', 'info');
-      const result = await NETWORK.init(mode, 'host', UI._storedRoomCode || ENGINE.generateRoomCode());
-      if (!result.ok) {
-        this.showToast('Network failed: ' + result.error + '. Falling back to local mode.', 'warn');
-      } else {
-        NETWORK.setupMessageHandler();
-        this.showToast('Room ready! Code: ' + (UI._storedRoomCode || ''), 'success');
-      }
+  async _createRoom() {
+    const mode = document.getElementById('conn-mode')?.value || 'peer';
+    const n = parseInt(document.getElementById('num-teams')?.value) || 2;
+    const hostName = (document.getElementById('host-team-name')?.value || 'Host Team').trim();
+    const membersRaw = document.getElementById('host-team-members')?.value || '';
+    const players = membersRaw.split(',').map(s => s.trim()).filter(Boolean);
+    if (players.length === 0) players.push('Host');
+
+    this.showToast('Creating room...', 'info');
+    const result = await NETWORK.init(mode, 'host', UI._storedRoomCode);
+    if (!result.ok) {
+      this.showToast('Network failed: ' + result.error, 'error');
+      return;
     }
 
+    NETWORK.totalSlots = n;
+    NETWORK.myTeamIndex = 0;
+    NETWORK.pendingTeams = [{ name: hostName, players, peerId: NETWORK.playerId }];
+    NETWORK.setupMessageHandler();
+    ENGINE.state.room.mode = mode;
+    ENGINE.state.room.code = UI._storedRoomCode;
+
     this.closeModal();
+    this._showWaitingRoom();
+  },
+
+  _showWaitingRoom() {
+    const code = UI._storedRoomCode || ENGINE.state.room.code;
+    const total = NETWORK.totalSlots;
+    const teams = NETWORK.pendingTeams;
+    const isHost = NETWORK.role === 'host';
+
+    this.root.innerHTML = `
+      <div class="lobby-screen">
+        <div class="logo-block">
+          <div class="jci-logo">JCI</div>
+          <h1 class="game-title">UNIFY PROJECT CHALLENGE</h1>
+        </div>
+        <div class="waiting-room">
+          <h2>${isHost ? 'Waiting for Teams' : 'Waiting for Host'}</h2>
+          <div class="room-code-display">${code}</div>
+          <p class="hint">${isHost
+            ? 'Share this code. Each team opens the game and clicks Join Room.'
+            : 'You\'re in! Your team was registered. Waiting for the host to start.'}</p>
+          <div class="team-slots" id="team-slots">
+            ${this._renderTeamSlots(teams, total)}
+          </div>
+          ${isHost ? `
+            <button class="btn-primary" id="btn-start-game"
+              ${teams.length < 1 ? 'disabled' : ''}
+              onclick="UI._hostStartGame()">
+              Start Game (${teams.length}/${total} teams ready)
+            </button>
+            <p class="hint" style="margin-top:.5rem">You can start with however many teams are in.</p>
+          ` : `
+            <div class="waiting-msg">⏳ Waiting for host to start the game...</div>
+          `}
+        </div>
+      </div>
+    `;
+  },
+
+  _renderTeamSlots(teams, total) {
+    let html = '';
+    for (let i = 0; i < total; i++) {
+      const t = teams[i];
+      html += `<div class="team-slot ${t ? 'filled' : 'empty'}">
+        <span class="slot-num">${i + 1}</span>
+        ${t
+          ? `<span class="slot-name">${t.name}</span><span class="slot-tag">${i === 0 ? 'Host' : 'Joined'}</span>`
+          : `<span class="slot-name">Waiting for team ${i + 1}...</span>`
+        }
+      </div>`;
+    }
+    return html;
+  },
+
+  _updateWaitingRoom() {
+    const teams = NETWORK.pendingTeams;
+    const total = NETWORK.totalSlots;
+    const slotsEl = document.getElementById('team-slots');
+    if (slotsEl) slotsEl.innerHTML = this._renderTeamSlots(teams, total);
+    const btn = document.getElementById('btn-start-game');
+    if (btn) {
+      btn.disabled = teams.length < 1;
+      btn.textContent = `Start Game (${teams.length}/${total} teams ready)`;
+    }
+    if (NETWORK.role !== 'host') {
+      // Client: re-render waiting room to show updated team list
+      const slotsEl2 = document.getElementById('team-slots');
+      if (!slotsEl2) this._showWaitingRoom();
+    }
+  },
+
+  _onTeamAssigned(teamIndex) {
+    this.showToast(`You are Team ${teamIndex + 1}!`, 'success');
+  },
+
+  _hostStartGame() {
+    const teamData = NETWORK.pendingTeams;
+    ENGINE.initLocalGame(teamData);
+    ENGINE.state.room.mode = NETWORK.mode;
+    ENGINE.state.room.code = UI._storedRoomCode;
+    ENGINE.state.currentTeamIndex = 0; // host plays team 0
+
+    // Build peerId → teamIndex map
+    const assignments = {};
+    teamData.forEach((t, i) => { assignments[t.peerId] = i; });
+    assignments[NETWORK.playerId] = 0;
+
+    NETWORK.myTeamIndex = 0;
+    ENGINE.state.currentTeamIndex = 0;
+
+    NETWORK.send({ type: 'game_start', state: ENGINE.state, assignments });
     this.renderGame();
   },
 
@@ -167,27 +299,30 @@ const UI = {
       <h2>Join a Room</h2>
       <div class="form-group">
         <label>Room Code</label>
-        <input type="text" id="join-code" placeholder="e.g. JCI-5821" class="code-input" maxlength="8" />
+        <input type="text" id="join-code" placeholder="JCI-XXXX" class="code-input" maxlength="8"
+          oninput="this.value=this.value.toUpperCase()" />
       </div>
       <div class="form-group">
-        <label>Your Name</label>
-        <input type="text" id="join-name" placeholder="Your name" />
+        <label>Your Team Name</label>
+        <input type="text" id="join-team-name" placeholder="e.g. JCI Lions" />
       </div>
       <div class="form-group">
-        <label>Your Team</label>
-        <input type="text" id="join-team" placeholder="Team name" />
+        <label>Team Members (comma-separated)</label>
+        <input type="text" id="join-team-members" placeholder="e.g. John, Maria, Priya" />
       </div>
       <button class="btn-primary" onclick="UI._joinRoom()">Join Game</button>
     `);
   },
 
   async _joinRoom() {
-    const code = (document.getElementById('join-code')?.value || '').toUpperCase();
-    const name = document.getElementById('join-name')?.value || 'Player';
-    const team = document.getElementById('join-team')?.value || 'My Team';
+    const code = (document.getElementById('join-code')?.value || '').toUpperCase().trim();
+    const teamName = (document.getElementById('join-team-name')?.value || 'My Team').trim();
+    const membersRaw = document.getElementById('join-team-members')?.value || '';
+    const players = membersRaw.split(',').map(s => s.trim()).filter(Boolean);
+    if (players.length === 0) players.push('Player');
 
-    if (!code.startsWith('JCI-')) {
-      this.showToast('Invalid room code. Format: JCI-XXXX', 'error'); return;
+    if (!code.match(/^JCI-[A-Z0-9]{4}$/)) {
+      this.showToast('Invalid room code — format is JCI-XXXX', 'error'); return;
     }
 
     this.showToast('Connecting...', 'info');
@@ -197,16 +332,15 @@ const UI = {
     }
 
     NETWORK.setupMessageHandler();
-    NETWORK.send({ type: 'player_join', name, team });
+    NETWORK.send({ type: 'team_register', teamName, playerNames: players });
     this.closeModal();
-    this.showToast('Connected! Waiting for host to start...', 'success');
 
-    NETWORK.onMessage = (msg) => {
-      if (msg.type === 'state_sync') {
-        ENGINE.state = msg.state;
-        UI.renderGame();
-      }
-    };
+    // Show client waiting screen
+    UI._storedRoomCode = code;
+    NETWORK.totalSlots = 99; // unknown until waiting_room_update
+    NETWORK.pendingTeams = [];
+    this._showWaitingRoom();
+    this.showToast('Connected! Waiting for host to start...', 'success');
   },
 
   showSoloSetup() {
@@ -261,6 +395,12 @@ const UI = {
   renderGame() {
     const state = ENGINE.state;
     const phaseData = ENGINE.PHASES[state.currentPhase - 1];
+
+    // In peer mode each device plays only their own team
+    if (NETWORK.mode !== 'local' && NETWORK.myTeamIndex >= 0) {
+      state.currentTeamIndex = NETWORK.myTeamIndex;
+    }
+
     const team = ENGINE.getCurrentTeam();
     const allTeams = state.teams;
 
@@ -1593,12 +1733,24 @@ const UI = {
   _advanceAndRender() {
     const state = ENGINE.state;
     const currentPhase = state.currentPhase;
-    const mode = state.room.mode;
 
-    // In local mode, cycle through teams before advancing phase
-    if (mode === 'local' && state.teams.length > 1) {
+    // Peer mode: each device plays their own team — no cycling, advance straight to next phase
+    if (NETWORK.mode !== 'local' && NETWORK.myTeamIndex >= 0) {
+      ENGINE.advancePhase();
+      state.currentTeamIndex = NETWORK.myTeamIndex;
+      // Push this team's updated state to host so leaderboard stays live
+      NETWORK.send({ type: 'team_state', teamIndex: NETWORK.myTeamIndex, team: ENGINE.getCurrentTeam() });
+      if (ENGINE.state.phase === 'ended') {
+        UI._finalizeGame();
+        return;
+      }
+      this.showLeaderboard(() => UI.renderGame());
+      return;
+    }
+
+    // Local hot-seat: cycle through teams before advancing phase
+    if (state.teams.length > 1) {
       ENGINE.advanceTeam();
-      // If not all teams done with this phase, show next team's turn
       if (!ENGINE.allTeamsCompletedPhase(currentPhase)) {
         this._showTeamHandoff(() => UI.renderGame());
         return;
@@ -1613,11 +1765,22 @@ const UI = {
       return;
     }
 
-    // Show inter-phase scoreboard
     this.showLeaderboard(() => UI.renderGame());
   },
 
   _checkAllTeamsDone() {
+    // Peer mode: each device finalizes their own team when they finish phase 16
+    if (NETWORK.mode !== 'local' && NETWORK.myTeamIndex >= 0) {
+      const myTeam = ENGINE.getCurrentTeam();
+      ENGINE.calculateFinalScore(myTeam);
+      NETWORK.send({ type: 'team_state', teamIndex: NETWORK.myTeamIndex, team: myTeam });
+      ENGINE.state.phase = 'ended';
+      ENGINE.save();
+      this.renderEndGame([]);
+      return;
+    }
+
+    // Local hot-seat: wait until all teams have finished phase 16
     if (ENGINE.allTeamsCompletedPhase(16)) {
       ENGINE.state.teams.forEach(t => ENGINE.calculateFinalScore(t));
       const awards = ENGINE.determineAwards(ENGINE.state.teams);

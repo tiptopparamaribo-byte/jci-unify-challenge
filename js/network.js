@@ -15,6 +15,9 @@ const NETWORK = {
   onPeerLeave: null,      // callback(peerId)
   onConnectionChange: null,
   _peerJSLoaded: false,
+  myTeamIndex: -1,      // which team slot this device plays (-1 = all, local mode)
+  pendingTeams: [],     // host: [{name, players, peerId}] registered so far
+  totalSlots: 0,        // host: how many teams the room expects
 
   // ──────────────────────────────────────────────
   // INITIALIZATION
@@ -110,8 +113,10 @@ const NETWORK = {
       conn.on('open', () => {
         console.log('[NETWORK] Client connected:', pid);
         if (this.onPeerJoin) this.onPeerJoin(pid);
-        // Send current game state to new client
-        this.sendTo(pid, { type: 'state_sync', state: ENGINE.state });
+        // Only sync state to late-joiners once game is running
+        if (ENGINE.state.phase === 'game') {
+          this.sendTo(pid, { type: 'state_sync', state: ENGINE.state });
+        }
       });
       conn.on('data', (data) => {
         if (this.onMessage) this.onMessage(data);
@@ -217,6 +222,39 @@ const NETWORK = {
         case 'phase_submit':
           if (this.role === 'host') {
             const result = ENGINE.submitPhaseChoices(msg.teamId, msg.phaseId, msg.choices);
+            this.syncState();
+          }
+          break;
+        case 'team_register':
+          if (this.role === 'host' && this.pendingTeams.length < this.totalSlots) {
+            const idx = this.pendingTeams.length;
+            this.pendingTeams.push({ name: msg.teamName, players: msg.playerNames || ['Player'], peerId: msg.from });
+            this.sendTo(msg.from, { type: 'team_assigned', teamIndex: idx });
+            this.send({ type: 'waiting_room_update', teams: this.pendingTeams, total: this.totalSlots });
+            if (window.UI) UI._updateWaitingRoom();
+          }
+          break;
+        case 'team_assigned':
+          this.myTeamIndex = msg.teamIndex;
+          if (window.UI) UI._onTeamAssigned(msg.teamIndex);
+          break;
+        case 'waiting_room_update':
+          this.pendingTeams = msg.teams;
+          this.totalSlots = msg.total;
+          if (window.UI) UI._updateWaitingRoom();
+          break;
+        case 'game_start':
+          ENGINE.state = msg.state;
+          if (msg.assignments && msg.assignments[NETWORK.playerId] !== undefined) {
+            NETWORK.myTeamIndex = msg.assignments[NETWORK.playerId];
+          }
+          ENGINE.state.currentTeamIndex = NETWORK.myTeamIndex;
+          if (window.UI) UI.renderGame();
+          break;
+        case 'team_state':
+          if (this.role === 'host' && msg.teamIndex !== undefined && ENGINE.state.teams[msg.teamIndex]) {
+            ENGINE.state.teams[msg.teamIndex] = msg.team;
+            ENGINE.save();
             this.syncState();
           }
           break;
