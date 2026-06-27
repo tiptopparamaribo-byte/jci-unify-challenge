@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="JCI UNIFY Project Challenge — The JCI project management simulation game for training and team competitions." />
+  <title>JCI UNIFY Project Challenge</title>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- Favicon (inline SVG as data URI) -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231B3A8C'/><text y='.9em' font-size='72' font-weight='900' fill='%23F5A623' font-family='sans-serif'>J</text></svg>" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="JCI UNIFY Project Challenge" />
+  <meta property="og:description" content="The JCI project management simulation — plan, fund, market, and execute a community project." />
+  <meta property="og:type" content="website" />
+</head>
+<body>
+
+  <!-- App root -->
+  <div id="app">
+    <!-- Loading state -->
+    <div style="
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      min-height:100vh;
+      background:linear-gradient(135deg,#1B3A8C,#2D4DB5);
+      color:white;
+    ">
+      <div style="font-size:3rem;font-weight:900;color:#F5A623;letter-spacing:.1em;">JCI</div>
+      <div style="font-size:1.2rem;font-weight:700;margin-top:.5rem;">UNIFY PROJECT CHALLENGE</div>
+      <div style="margin-top:1.5rem;font-size:.9rem;opacity:.7;">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Toast container (inserted by JS) -->
+
+  <!-- Scripts — order matters -->
+  <script src="js/data.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/network.js"></script>
+  <script src="js/ui.js"></script>
+
+  <script>
+    // Entry point
+    window.addEventListener('DOMContentLoaded', () => {
+      try {
+        UI.init();
+      } catch(err) {
+        document.getElementById('app').innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem;text-align:center;">
+            <div>
+              <h2 style="color:#EF4444">Failed to Load Game</h2>
+              <p style="margin:.5rem 0;color:#6B7280">${err.message}</p>
+              <button onclick="location.reload()" style="margin-top:1rem;padding:.6rem 1.5rem;background:#1B3A8C;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:700;">
+                Reload
+              </button>
+            </div>
+          </div>
+        `;
+        console.error('JCI Game Error:', err);
+      }
+    });
+
+    // Service Worker for offline support (optional, gracefully skipped if SW not supported)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {
+        // Service worker optional — game works fine without it
+      });
+    }
+  </script>
+
+</body>
+</html>
