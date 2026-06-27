@@ -229,14 +229,18 @@ const NETWORK = {
           if (this.role === 'host' && this.pendingTeams.length < this.totalSlots) {
             const idx = this.pendingTeams.length;
             this.pendingTeams.push({ name: msg.teamName, players: msg.playerNames || ['Player'], peerId: msg.from });
-            this.sendTo(msg.from, { type: 'team_assigned', teamIndex: idx });
+            // Broadcast team_assigned with forPeerId so only the right client picks it up
+            // (avoids sendTo key mismatch between game playerId and PeerJS peer ID)
+            this.send({ type: 'team_assigned', teamIndex: idx, forPeerId: msg.from });
             this.send({ type: 'waiting_room_update', teams: this.pendingTeams, total: this.totalSlots });
             if (window.UI) UI._updateWaitingRoom();
           }
           break;
         case 'team_assigned':
-          this.myTeamIndex = msg.teamIndex;
-          if (window.UI) UI._onTeamAssigned(msg.teamIndex);
+          if (msg.forPeerId === NETWORK.playerId) {
+            this.myTeamIndex = msg.teamIndex;
+            if (window.UI) UI._onTeamAssigned(msg.teamIndex);
+          }
           break;
         case 'waiting_room_update':
           this.pendingTeams = msg.teams;
@@ -250,13 +254,6 @@ const NETWORK = {
           }
           ENGINE.state.currentTeamIndex = NETWORK.myTeamIndex;
           if (window.UI) UI.renderGame();
-          break;
-        case 'team_state':
-          if (this.role === 'host' && msg.teamIndex !== undefined && ENGINE.state.teams[msg.teamIndex]) {
-            ENGINE.state.teams[msg.teamIndex] = msg.team;
-            ENGINE.save();
-            this.syncState();
-          }
           break;
         case 'player_join':
           if (window.UI) UI.handlePlayerJoin(msg);

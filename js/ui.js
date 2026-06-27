@@ -264,15 +264,12 @@ const UI = {
       btn.disabled = teams.length < 1;
       btn.textContent = `Start Game (${teams.length}/${total} teams ready)`;
     }
-    if (NETWORK.role !== 'host') {
-      // Client: re-render waiting room to show updated team list
-      const slotsEl2 = document.getElementById('team-slots');
-      if (!slotsEl2) this._showWaitingRoom();
-    }
   },
 
   _onTeamAssigned(teamIndex) {
     this.showToast(`You are Team ${teamIndex + 1}!`, 'success');
+    const statusEl = document.getElementById('join-status');
+    if (statusEl) statusEl.textContent = `✅ You are Team ${teamIndex + 1}. Waiting for host to start...`;
   },
 
   _hostStartGame() {
@@ -332,15 +329,27 @@ const UI = {
     }
 
     NETWORK.setupMessageHandler();
+    UI._storedRoomCode = code;
     NETWORK.send({ type: 'team_register', teamName, playerNames: players });
     this.closeModal();
 
-    // Show client waiting screen
-    UI._storedRoomCode = code;
-    NETWORK.totalSlots = 99; // unknown until waiting_room_update
-    NETWORK.pendingTeams = [];
-    this._showWaitingRoom();
-    this.showToast('Connected! Waiting for host to start...', 'success');
+    // Simple waiting screen — _updateWaitingRoom fills in slot details when waiting_room_update arrives
+    this.root.innerHTML = `
+      <div class="lobby-screen">
+        <div class="logo-block">
+          <div class="jci-logo">JCI</div>
+          <h1 class="game-title">UNIFY PROJECT CHALLENGE</h1>
+        </div>
+        <div class="waiting-room">
+          <h2>Joined Room ${code}</h2>
+          <p>Your team: <strong>${teamName}</strong></p>
+          <div class="team-slots" id="team-slots">
+            <div class="waiting-msg" id="join-status">⏳ Registering your team with the host...</div>
+          </div>
+          <div class="waiting-msg" style="margin-top:0">Waiting for host to start the game...</div>
+        </div>
+      </div>
+    `;
   },
 
   showSoloSetup() {
@@ -1738,8 +1747,6 @@ const UI = {
     if (NETWORK.mode !== 'local' && NETWORK.myTeamIndex >= 0) {
       ENGINE.advancePhase();
       state.currentTeamIndex = NETWORK.myTeamIndex;
-      // Push this team's updated state to host so leaderboard stays live
-      NETWORK.send({ type: 'team_state', teamIndex: NETWORK.myTeamIndex, team: ENGINE.getCurrentTeam() });
       if (ENGINE.state.phase === 'ended') {
         UI._finalizeGame();
         return;
@@ -1769,11 +1776,10 @@ const UI = {
   },
 
   _checkAllTeamsDone() {
-    // Peer mode: each device finalizes their own team when they finish phase 16
+    // Peer mode: each device finalizes their own team independently
     if (NETWORK.mode !== 'local' && NETWORK.myTeamIndex >= 0) {
       const myTeam = ENGINE.getCurrentTeam();
       ENGINE.calculateFinalScore(myTeam);
-      NETWORK.send({ type: 'team_state', teamIndex: NETWORK.myTeamIndex, team: myTeam });
       ENGINE.state.phase = 'ended';
       ENGINE.save();
       this.renderEndGame([]);
